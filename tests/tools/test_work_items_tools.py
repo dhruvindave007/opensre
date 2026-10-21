@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -226,6 +227,45 @@ def test_rescheduling_back_to_replaced_reminder_reenables_it(
     assert restored.id == original.id
     assert restored.enabled is True
     assert [task.enabled for task in list_tasks()] == [True, False]
+
+
+def test_concurrent_reschedules_leave_exactly_one_reminder_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "infrastructure.scheduling.scheduler.storage.task_store.default_task_store_path",
+        lambda: tmp_path / "scheduler_tasks.json",
+    )
+    monkeypatch.setattr(
+        "infrastructure.scheduling.scheduler.reload_signal.request_scheduler_reload",
+        lambda: None,
+    )
+
+    item = make_work_item(title="Check clusters", remind_at="2027-08-24T10:00:00Z")
+    targets = [WorkItemChannelTarget(provider="slack", chat_id="C999")]
+    times = [f"2027-08-24T{hour:02d}:00:00Z" for hour in range(10, 18)]
+    start = threading.Barrier(len(times))
+    errors: list[BaseException] = []
+
+    def _reschedule(remind_at: str) -> None:
+        start.wait()
+        try:
+            schedule_item_reminder(
+                dataclasses.replace(item, remind_at=remind_at), targets=targets, timezone="UTC"
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_reschedule, args=(when,)) for when in times]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    tasks = list_tasks()
+    assert len(tasks) == len(times)
+    assert [task.enabled for task in tasks].count(True) == 1
 
 
 def test_reminder_scheduling_resolves_naive_datetime_in_requested_timezone(

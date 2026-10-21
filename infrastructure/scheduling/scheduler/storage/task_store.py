@@ -355,6 +355,44 @@ def add_task(task: ScheduledTask, store_path: Path | None = None) -> ScheduledTa
     return stored_task
 
 
+def replace_tasks(
+    task: ScheduledTask,
+    replaces: Callable[[Mapping[str, Any]], bool],
+    store_path: Path | None = None,
+) -> ScheduledTask:
+    """Store ``task`` enabled and disable other enabled rows ``replaces`` selects, in one lock.
+
+    A stored row with the same schedule identity is reused and re-enabled, so
+    re-adding an unchanged schedule never resolves to a row a prior replace
+    disabled. Concurrent replaces serialize on the store lock: the last one
+    leaves exactly its own row enabled.
+    """
+    path = store_path or default_task_store_path()
+    task = _owned_by_acting_scope(task)
+    disabled_ids: list[str] = []
+    lock = FileLock(_lock_path(path))
+    with lock:
+        raw = _load_for_write(path)
+        wanted = _schedule_identity(task.model_dump(mode="json"))
+        existing = next((entry for entry in raw if _schedule_identity(entry) == wanted), None)
+        if existing is None:
+            existing = task.model_dump(mode="json")
+            raw.append(existing)
+        existing["enabled"] = True
+        for entry in raw:
+            if entry is existing or entry.get("enabled") is False or not replaces(entry):
+                continue
+            entry["enabled"] = False
+            disabled_ids.append(str(entry.get("id") or ""))
+        stored_task = ScheduledTask.model_validate(existing)
+        _save_raw(path, raw)
+    reload_signal.request_scheduler_reload()
+    run_db = _run_database_for_store(path)
+    for task_id in disabled_ids:
+        skip_queued_runs(task_id, reason="disabled", db_path=run_db)
+    return stored_task
+
+
 def remove_task(task_id: str, store_path: Path | None = None) -> bool:
     """Remove a schedule while retaining its execution history for diagnosis."""
     path = store_path or default_task_store_path()

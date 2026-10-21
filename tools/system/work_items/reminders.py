@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import Any
 
 from config.constants.work_items import WORK_ITEM_REMINDER_RUN_AT_PARAM
 from core.domain.work_items import (
@@ -12,21 +14,18 @@ from core.domain.work_items import (
     resolve_work_item_datetime,
     work_items_path,
 )
-from infrastructure.scheduling.scheduler.storage import add_task as add_scheduled_task
-from infrastructure.scheduling.scheduler.storage import list_tasks, update_task
+from infrastructure.scheduling.scheduler.storage import list_tasks, replace_tasks, update_task
 from infrastructure.scheduling.scheduler.types import Provider, ScheduledTask, TaskKind
 from tools.system.work_items.validation import validate_provider
 
 
-def disable_existing_item_reminders(item_id: str, *, keep_task_id: str = "") -> int:
-    """Disable enabled one-shot reminders for ``item_id`` except ``keep_task_id``."""
+def disable_existing_item_reminders(item_id: str) -> int:
+    """Disable enabled one-shot reminders for ``item_id`` so updates replace them."""
     disabled = 0
     for task in list_tasks():
         if task.kind is not TaskKind.WORK_ITEM_REMINDER:
             continue
         if not task.enabled:
-            continue
-        if keep_task_id and task.id == keep_task_id:
             continue
         if task.params.get("work_item_id", "").strip() != item_id:
             continue
@@ -73,15 +72,16 @@ def schedule_item_reminder(
             ),
         },
     )
-    # The store dedupes by schedule identity, which ignores ``enabled``, so an
-    # identical reminder resolves to its existing row even after it was replaced.
-    stored = add_scheduled_task(task)
-    if not stored.enabled:
-        stored.enabled = True
-        update_task(stored)
-    # Replace any prior reminder for this work item with the one just stored.
-    disable_existing_item_reminders(item.id, keep_task_id=stored.id)
-    return stored
+
+    def _is_item_reminder(entry: Mapping[str, Any]) -> bool:
+        params = entry.get("params") or {}
+        return (
+            entry.get("kind") == TaskKind.WORK_ITEM_REMINDER.value
+            and str(params.get("work_item_id", "")).strip() == item.id
+        )
+
+    # One locked store operation, so concurrent reschedules cannot disable each other.
+    return replace_tasks(task, _is_item_reminder)
 
 
 _disable_existing_item_reminders = disable_existing_item_reminders
