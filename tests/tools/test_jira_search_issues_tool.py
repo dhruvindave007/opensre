@@ -76,6 +76,25 @@ def test_run_surfaces_truncated_search(mock_make: MagicMock) -> None:
 
 
 @patch("integrations.jira.tools.search_issues.make_jira_client")
+def test_run_forwards_page_token_to_the_client(mock_make: MagicMock) -> None:
+    mock_client = MagicMock()
+    mock_client.search_issues.return_value = {"success": True, "issues": [], "total": 0}
+    mock_make.return_value = mock_client
+
+    _tool().run(
+        base_url="https://x.atlassian.net",
+        email="u@e.com",
+        api_token="tok",
+        jql="project = OPS",
+        page_token="page-2",
+    )
+
+    mock_client.search_issues.assert_called_once_with(
+        jql="project = OPS", max_results=20, next_page_token="page-2"
+    )
+
+
+@patch("integrations.jira.tools.search_issues.make_jira_client")
 def test_run_returns_unavailable_on_api_failure(mock_make: MagicMock) -> None:
     mock_client = MagicMock()
     mock_client.search_issues.return_value = {"success": False, "error": "HTTP 400"}

@@ -66,6 +66,14 @@ class JiraSearchIssuesTool(BaseTool):
                 "default": 20,
                 "description": "Maximum number of issues to return",
             },
+            "page_token": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "next_page_token from a previous call with the same jql, "
+                    "to fetch the next page of results"
+                ),
+            },
         },
         "required": ["base_url", "email", "api_token"],
     }
@@ -73,7 +81,7 @@ class JiraSearchIssuesTool(BaseTool):
         "issues": "List of issues with key, summary, status, priority, labels, and assignee",
         "total": "Total number of matching issues, or null when more pages exist",
         "truncated": "true when more matching issues exist beyond the returned page",
-        "next_page_token": "Token for the next page of results; empty on the last page",
+        "next_page_token": "Pass as page_token with the same jql to fetch the next page; empty on the last page",
     }
 
     def is_available(self, sources: dict) -> bool:
@@ -98,6 +106,7 @@ class JiraSearchIssuesTool(BaseTool):
         project_key: str = "",
         jql: str = "",
         max_results: int = 20,
+        page_token: str = "",
         **_kwargs: Any,
     ) -> dict[str, Any]:
         client = make_jira_client(base_url, email, api_token, project_key)
@@ -106,7 +115,7 @@ class JiraSearchIssuesTool(BaseTool):
                 "jira", "Jira integration is not configured.", issues=[], total=0
             )
 
-        result = client.search_issues(jql=jql, max_results=max_results)
+        result = client.search_issues(jql=jql, max_results=max_results, next_page_token=page_token)
 
         if not result.get("success"):
             return tool_unavailable(

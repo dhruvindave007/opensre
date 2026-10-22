@@ -176,8 +176,9 @@ class JiraClient:
         self,
         jql: str = "",
         max_results: int = 20,
+        next_page_token: str = "",
     ) -> dict[str, Any]:
-        """Search Jira issues via JQL to find related incidents, bugs, or tasks."""
+        """Search Jira issues via JQL; pass a prior ``next_page_token`` to fetch the next page."""
         if not jql and self.config.project_key:
             jql = f"project = {self.config.project_key} ORDER BY updated DESC"
         elif not jql:
@@ -196,6 +197,8 @@ class JiraClient:
                 "assignee",
             ],
         }
+        if next_page_token:
+            payload["nextPageToken"] = next_page_token
 
         try:
             with self._get_client() as client:
@@ -224,18 +227,19 @@ class JiraClient:
                     )
 
                 # Enhanced search pages with isLast/nextPageToken and omits the
-                # total, so the page length is the match count only on the last page.
-                next_page_token = str(data.get("nextPageToken") or "")
-                truncated = data.get("isLast") is False or bool(next_page_token)
+                # total, so the page length is the match count only when this
+                # single page is the whole result.
+                following_token = str(data.get("nextPageToken") or "")
+                truncated = data.get("isLast") is False or bool(following_token)
                 total = data.get("total")
-                if total is None and not truncated:
+                if total is None and not truncated and not next_page_token:
                     total = len(issues)
                 return {
                     "success": True,
                     "issues": issues,
                     "total": total,
                     "truncated": truncated,
-                    "next_page_token": next_page_token,
+                    "next_page_token": following_token,
                 }
         except httpx.HTTPStatusError as exc:
             capture_service_error(exc, logger=logger, integration="jira", method="search_issues")

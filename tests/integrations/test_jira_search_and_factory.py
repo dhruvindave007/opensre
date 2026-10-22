@@ -107,6 +107,41 @@ def test_search_issues_flags_partial_page_without_reporting_page_length_as_total
     assert result["next_page_token"] == "page-2"
 
 
+def test_search_issues_sends_page_token_only_when_continuing(client: JiraClient) -> None:
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"issues": [], "isLast": True}
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.Client.post", return_value=mock_resp) as mock_post:
+        client.search_issues(jql="project = OPS")
+        client.search_issues(jql="project = OPS", next_page_token="page-2")
+
+    first_body = mock_post.call_args_list[0].kwargs["json"]
+    next_body = mock_post.call_args_list[1].kwargs["json"]
+    assert "nextPageToken" not in first_body
+    assert next_body["nextPageToken"] == "page-2"
+    assert next_body["jql"] == "project = OPS"
+
+
+def test_search_issues_last_page_of_a_continued_search_has_unknown_total(
+    client: JiraClient,
+) -> None:
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "issues": [{"key": f"OPS-{n}", "fields": {}} for n in range(8)],
+        "isLast": True,
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.Client.post", return_value=mock_resp):
+        result = client.search_issues(jql="project = OPS", next_page_token="page-2")
+
+    # 8 is only the size of the final page, not the number of matches.
+    assert result["truncated"] is False
+    assert result["total"] is None
+    assert result["next_page_token"] == ""
+
+
 def test_search_issues_http_error(client: JiraClient) -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 400
